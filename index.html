@@ -1,0 +1,1320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IranWatch — OSINT Dashboard</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,700;1,400&family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <style>
+    /* ── Design tokens ─────────────────────────────────────── */
+    :root {
+      --bg:       #080c14;
+      --surface:  #0d1420;
+      --surface2: #111927;
+      --border:   #1e2d42;
+      --text:     #e8edf5;
+      --muted:    #5a7090;
+      --blue:     #2e75f0;
+      --green:    #3ecf72;
+      --amber:    #f6ad3a;
+      --red:      #e53e3e;
+      --mono:     'JetBrains Mono', monospace;
+      --ui:       'Syne', sans-serif;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--ui);
+      min-height: 100vh;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    /* Scanline overlay */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent 0px,
+        transparent 2px,
+        rgba(0,0,0,0.025) 2px,
+        rgba(0,0,0,0.025) 4px
+      );
+      pointer-events: none;
+      z-index: 9999;
+    }
+
+    /* ── Top bar ─────────────────────────────────────────────── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      flex-wrap: wrap;
+    }
+
+    .logo {
+      font-family: var(--ui);
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+    }
+    .logo .iran  { color: var(--text); }
+    .logo .watch { color: var(--blue); }
+
+    .live-pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(62,207,114,0.08);
+      border: 1px solid rgba(62,207,114,0.25);
+      border-radius: 20px;
+      padding: 3px 10px 3px 8px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      color: var(--green);
+    }
+
+    .live-dot {
+      width: 7px; height: 7px;
+      background: var(--green);
+      border-radius: 50%;
+      animation: pulse-green 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse-green {
+      0%,100% { opacity:1; box-shadow: 0 0 0 0 rgba(62,207,114,0.5); }
+      50%      { opacity:.8; box-shadow: 0 0 0 5px rgba(62,207,114,0); }
+    }
+
+    .topbar-time {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .topbar-spacer { flex: 1; min-width: 8px; }
+
+    .city-select {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--ui);
+      font-size: 13px;
+      padding: 5px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      outline: none;
+      transition: border-color .2s;
+    }
+    .city-select:focus { border-color: var(--blue); }
+
+    .btn-refresh {
+      background: var(--blue);
+      color: #fff;
+      border: none;
+      font-family: var(--ui);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+      white-space: nowrap;
+    }
+    .btn-refresh:hover  { opacity: .85; }
+    .btn-refresh:active { transform: scale(.97); }
+
+    /* ── Layout shell ────────────────────────────────────────── */
+    .main {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      max-width: 1800px;
+      margin: 0 auto;
+    }
+
+    /* ── Panel base ──────────────────────────────────────────── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 14px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      gap: 8px;
+    }
+
+    .panel-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .pill {
+      font-family: var(--mono);
+      font-size: 10px;
+      padding: 2px 9px;
+      border-radius: 20px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .pill-green  { color: var(--green);  background: rgba(62,207,114,0.1);  border: 1px solid rgba(62,207,114,0.2); }
+    .pill-amber  { color: var(--amber);  background: rgba(246,173,58,0.1);  border: 1px solid rgba(246,173,58,0.2); }
+    .pill-red    { color: var(--red);    background: rgba(229,62,62,0.1);   border: 1px solid rgba(229,62,62,0.2); }
+    .pill-blue   { color: var(--blue);   background: rgba(46,117,240,0.1);  border: 1px solid rgba(46,117,240,0.2); }
+    .pill-muted  { color: var(--muted);  background: rgba(90,112,144,0.08); border: 1px solid rgba(90,112,144,0.15); }
+
+    .panel-body { padding: 14px; }
+
+    /* ── Map ─────────────────────────────────────────────────── */
+    .map-wrap { position: relative; }
+
+    #aircraft-map {
+      width: 100%;
+      height: 520px;
+      background: var(--bg);
+    }
+
+    /* Leaflet dark overrides */
+    .leaflet-container { background: #09111f; }
+    .leaflet-control-zoom a {
+      background: var(--surface) !important;
+      border-color: var(--border) !important;
+      color: var(--text) !important;
+    }
+    .leaflet-control-zoom a:hover { background: var(--surface2) !important; }
+    .leaflet-popup-content-wrapper {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+    .leaflet-popup-tip { background: var(--surface); }
+    .leaflet-popup-content { margin: 12px 14px; font-family: var(--mono); font-size: 11px; }
+    .leaflet-attribution-flag { display: none !important; }
+    .leaflet-control-attribution {
+      background: rgba(13,20,32,0.8) !important;
+      color: var(--muted) !important;
+      font-size: 9px !important;
+    }
+    .leaflet-control-attribution a { color: var(--muted) !important; }
+
+    /* Map HUD overlays */
+    .map-ac-count {
+      position: absolute;
+      top: 12px; right: 12px;
+      z-index: 800;
+      background: rgba(13,20,32,0.92);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 14px;
+      text-align: center;
+      backdrop-filter: blur(6px);
+    }
+    .map-ac-count .num {
+      font-family: var(--mono);
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--blue);
+      line-height: 1;
+    }
+    .map-ac-count .lbl {
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+
+    .map-ts {
+      position: absolute;
+      bottom: 10px; left: 12px;
+      z-index: 800;
+      background: rgba(13,20,32,0.88);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      backdrop-filter: blur(4px);
+    }
+
+    .map-legend {
+      position: absolute;
+      bottom: 10px; right: 12px;
+      z-index: 800;
+      background: rgba(13,20,32,0.92);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 12px;
+      backdrop-filter: blur(6px);
+    }
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-family: var(--mono);
+      font-size: 9px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .legend-row:last-child { margin-bottom: 0; }
+    .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+    .map-error-overlay {
+      position: absolute;
+      inset: 44px 0 0 0;
+      background: rgba(8,12,20,0.78);
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      z-index: 900;
+      backdrop-filter: blur(2px);
+    }
+    .map-error-overlay.show { display: flex; }
+    .map-error-overlay span { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+
+    /* Aircraft markers */
+    .ac-wrap {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .ac-wrap svg { filter: drop-shadow(0 1px 3px rgba(0,0,0,.9)); }
+
+    @keyframes emergency-ring {
+      0%   { transform: scale(1);   opacity: .9; }
+      70%  { transform: scale(2.2); opacity: 0; }
+      100% { transform: scale(2.2); opacity: 0; }
+    }
+    .ac-emergency-ring {
+      position: absolute;
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      border: 2px solid var(--red);
+      animation: emergency-ring 1.4s ease-out infinite;
+      pointer-events: none;
+    }
+
+    /* Popup internals */
+    .pu-cs { font-size: 14px; font-weight: 700; color: var(--blue); margin-bottom: 9px; }
+    .pu-row { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 3px; }
+    .pu-lbl { color: var(--muted); }
+    .pu-val { color: var(--text); font-weight: 500; }
+    .pu-em  { margin-top: 8px; padding: 4px 8px; background: rgba(229,62,62,.15); color: var(--red); border-radius: 4px; font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+
+    /* ── 3-column grid ───────────────────────────────────────── */
+    .data-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 1100px) { .data-grid { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 700px)  { .data-grid { grid-template-columns: 1fr; } }
+
+    /* ── Weather ─────────────────────────────────────────────── */
+    .wx-current {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .wx-temp {
+      font-family: var(--mono);
+      font-size: 52px;
+      font-weight: 700;
+      line-height: 1;
+      color: var(--text);
+    }
+    .wx-icon { font-size: 32px; line-height: 1; }
+    .wx-cond { font-size: 14px; font-weight: 600; margin-bottom: 3px; }
+    .wx-wind { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+    .alerts { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+    .alert {
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .alert-red   { background: rgba(229,62,62,.12);   color: var(--red);   border: 1px solid rgba(229,62,62,.25); }
+    .alert-amber { background: rgba(246,173,58,.12);  color: var(--amber); border: 1px solid rgba(246,173,58,.25); }
+
+    .fc-strip {
+      display: flex;
+      gap: 7px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .fc-strip::-webkit-scrollbar { height: 3px; }
+    .fc-strip::-webkit-scrollbar-track { background: var(--surface2); }
+    .fc-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    .fc-day {
+      flex: 0 0 auto;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 7px;
+      text-align: center;
+      min-width: 54px;
+    }
+    .fc-day-lbl { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; }
+    .fc-day-icon { font-size: 16px; margin-bottom: 4px; }
+    .fc-day-temps { font-family: var(--mono); font-size: 10px; }
+    .fc-max { color: var(--amber); }
+    .fc-min { color: var(--muted); }
+
+    /* ── Internet panel ──────────────────────────────────────── */
+    .inet-circle {
+      width: 90px; height: 90px;
+      border-radius: 50%;
+      border: 3px solid;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      margin: 0 auto 16px;
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      transition: border-color .5s, color .5s;
+    }
+    .inet-circle .pct { font-size: 22px; font-weight: 800; line-height: 1.1; }
+
+    .inet-normal   { border-color: var(--green); color: var(--green); background: rgba(62,207,114,.05); }
+    .inet-degraded { border-color: var(--amber); color: var(--amber); background: rgba(246,173,58,.05); }
+    .inet-outage   { border-color: var(--red);   color: var(--red);   background: rgba(229,62,62,.05); }
+
+    .bar-row { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; color: var(--muted); margin-bottom: 5px; }
+    .bar-track { background: var(--surface2); border-radius: 4px; height: 7px; overflow: hidden; margin-bottom: 14px; }
+    .bar-fill  { height: 100%; border-radius: 4px; transition: width 1s ease, background .5s; }
+
+    .ooni-list { display: flex; flex-direction: column; gap: 6px; }
+    .ooni-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px;
+    }
+    .ooni-type { font-family: var(--mono); font-size: 10px; color: var(--amber); letter-spacing: .06em; margin-bottom: 2px; }
+    .ooni-meta { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10px; }
+    .ooni-date { color: var(--muted); }
+
+    /* ── Markets + News ──────────────────────────────────────── */
+    .mkt-item {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 11px;
+      margin-bottom: 6px;
+    }
+    .mkt-q { font-size: 11px; line-height: 1.45; margin-bottom: 7px; }
+    .mkt-stats { display: flex; align-items: center; justify-content: space-between; }
+    .mkt-prob { font-family: var(--mono); font-size: 20px; font-weight: 700; }
+    .mkt-prob-lo  { color: var(--green); }
+    .mkt-prob-mid { color: var(--amber); }
+    .mkt-prob-hi  { color: var(--red); }
+    .mkt-vol { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+
+    .news-list { display: flex; flex-direction: column; gap: 0; }
+    .news-item { border-bottom: 1px solid rgba(30,45,66,.7); padding: 8px 0; }
+    .news-item:first-child { padding-top: 0; }
+    .news-item:last-child  { border-bottom: none; padding-bottom: 0; }
+    .news-hl { font-size: 12px; line-height: 1.4; margin-bottom: 3px; }
+    .news-hl a { color: var(--text); text-decoration: none; }
+    .news-hl a:hover { color: var(--blue); }
+    .news-meta { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+
+    /* ── MCP panel ───────────────────────────────────────────── */
+    .mcp-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      user-select: none;
+      transition: background .15s;
+    }
+    .mcp-toggle:hover { background: rgba(30,45,66,.6); }
+    .mcp-chevron { color: var(--muted); font-size: 11px; transition: transform .3s; }
+    .mcp-chevron.open { transform: rotate(180deg); }
+    .mcp-body { display: none; padding: 14px; }
+    .mcp-body.open { display: block; }
+
+    .ep-table { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; margin-bottom: 18px; }
+    .ep-table th {
+      text-align: left;
+      padding: 5px 8px;
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+    .ep-table td { padding: 7px 8px; border-bottom: 1px solid rgba(30,45,66,.4); vertical-align: middle; }
+    .ep-table tr:last-child td { border-bottom: none; }
+    .ep-path { color: var(--blue); }
+    .ep-tool { color: var(--green); }
+    .ep-ttl  { color: var(--amber); }
+    .ep-desc { color: var(--muted); font-size: 10px; }
+
+    .copy-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 9px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all .2s;
+      white-space: nowrap;
+    }
+    .copy-btn:hover { color: var(--text); border-color: var(--blue); }
+    .copy-btn.ok { color: var(--green); border-color: var(--green); }
+
+    .json-block {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 14px 14px 14px;
+      position: relative;
+    }
+    .json-block pre {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.65;
+      overflow-x: auto;
+    }
+    .json-copy { position: absolute; top: 10px; right: 10px; }
+
+    /* ── Emergency aid ───────────────────────────────────────── */
+    .aid-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 12px;
+    }
+    .aid-card {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 13px;
+      transition: border-color .2s, transform .15s;
+    }
+    .aid-card:hover { border-color: var(--blue); transform: translateY(-1px); }
+    .aid-card a { text-decoration: none; color: inherit; display: block; }
+    .aid-org { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+    .aid-url { font-family: var(--mono); font-size: 10px; color: var(--blue); margin-bottom: 4px; word-break: break-all; }
+    .aid-desc { font-size: 11px; color: var(--muted); }
+
+    /* ── Shared utility ──────────────────────────────────────── */
+    .loading {
+      display: flex; align-items: center; justify-content: center;
+      gap: 8px; padding: 38px 20px;
+      color: var(--muted); font-family: var(--mono); font-size: 11px;
+    }
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .error-state {
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 28px 20px; gap: 10px;
+      color: var(--muted); text-align: center;
+    }
+    .error-icon { font-size: 26px; }
+    .error-msg  { font-family: var(--mono); font-size: 11px; }
+
+    .btn-retry {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-family: var(--ui);
+      font-size: 11px;
+      padding: 5px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: border-color .2s, color .2s;
+    }
+    .btn-retry:hover { border-color: var(--blue); color: var(--blue); }
+
+    .last-ts {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--muted);
+      text-align: right;
+      margin-top: 10px;
+    }
+
+    .sec-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .1em;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    .divider { height: 1px; background: var(--border); margin: 12px 0; }
+  </style>
+</head>
+<body>
+
+<!-- ════════════════════════════════ TOP BAR ═════════════════════════════════ -->
+<div class="topbar">
+  <div class="logo"><span class="iran">IRAN</span><span class="watch">WATCH</span></div>
+  <div class="live-pill"><div class="live-dot"></div>LIVE</div>
+  <div class="topbar-time" id="topbar-time">—</div>
+  <div class="topbar-spacer"></div>
+  <select class="city-select" id="city-select" onchange="onCityChange()">
+    <option value="35.6892,51.3890,Tehran">Tehran</option>
+    <option value="32.6539,51.6660,Isfahan">Isfahan</option>
+    <option value="29.5918,52.5837,Shiraz">Shiraz</option>
+    <option value="38.0962,46.2738,Tabriz">Tabriz</option>
+    <option value="36.2605,59.6168,Mashhad">Mashhad</option>
+    <option value="31.3183,48.6706,Ahvaz">Ahvaz</option>
+    <option value="34.3142,47.0650,Kermanshah">Kermanshah</option>
+    <option value="29.4963,60.8629,Zahedan">Zahedan</option>
+  </select>
+  <button class="btn-refresh" onclick="refreshAll()">↻ REFRESH ALL</button>
+</div>
+
+<!-- ══════════════════════════════════ MAIN ══════════════════════════════════ -->
+<div class="main">
+
+  <!-- ── Aircraft map ───────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">✈ Live Airspace — Iran Region · 500 km radius</span>
+      <span class="pill pill-blue" id="ac-badge">— aircraft</span>
+    </div>
+    <div class="map-wrap">
+      <div id="aircraft-map"></div>
+      <!-- HUD count -->
+      <div class="map-ac-count">
+        <div class="num" id="ac-num">—</div>
+        <div class="lbl">Aircraft</div>
+      </div>
+      <!-- Timestamp -->
+      <div class="map-ts" id="map-ts">Loading airspace data…</div>
+      <!-- Legend -->
+      <div class="map-legend">
+        <div class="legend-row"><div class="legend-dot" style="background:#e53e3e"></div>Ground / &lt;5k ft</div>
+        <div class="legend-row"><div class="legend-dot" style="background:#f6ad3a"></div>5k – 20k ft</div>
+        <div class="legend-row"><div class="legend-dot" style="background:#2e75f0"></div>20k – 35k ft</div>
+        <div class="legend-row"><div class="legend-dot" style="background:#ffffff"></div>35k+ ft</div>
+      </div>
+      <!-- Error overlay -->
+      <div class="map-error-overlay" id="map-error">
+        <span style="font-size:36px">✈</span>
+        <span>Airspace data temporarily unavailable</span>
+        <button class="btn-retry" onclick="loadAircraft()">↻ Retry</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 3-column data grid ─────────────────────────────────── -->
+  <div class="data-grid">
+
+    <!-- Weather -->
+    <div class="panel" id="panel-wx">
+      <div class="panel-header">
+        <span class="panel-title">⛅ Weather Intelligence</span>
+        <span class="pill pill-muted" id="wx-city-pill">Tehran</span>
+      </div>
+      <div class="panel-body" id="wx-body">
+        <div class="loading"><div class="spinner"></div>Loading…</div>
+      </div>
+    </div>
+
+    <!-- Internet -->
+    <div class="panel" id="panel-inet">
+      <div class="panel-header">
+        <span class="panel-title">🌐 Internet Status — IR</span>
+        <span class="pill pill-muted" id="inet-badge">—</span>
+      </div>
+      <div class="panel-body" id="inet-body">
+        <div class="loading"><div class="spinner"></div>Loading…</div>
+      </div>
+    </div>
+
+    <!-- Markets + News -->
+    <div class="panel" id="panel-mkt">
+      <div class="panel-header">
+        <span class="panel-title">📊 Prediction Markets + News</span>
+        <span class="pill pill-muted">Polymarket · BBC</span>
+      </div>
+      <div class="panel-body" id="mkt-body">
+        <div class="loading"><div class="spinner"></div>Loading…</div>
+      </div>
+    </div>
+
+  </div><!-- /data-grid -->
+
+  <!-- ── MCP API reference (collapsible) ────────────────────── -->
+  <div class="panel">
+    <div class="mcp-toggle" onclick="toggleMcp()">
+      <span class="panel-title">⚙ MCP API Reference — Endpoint Registry</span>
+      <span class="mcp-chevron" id="mcp-chev">▼</span>
+    </div>
+    <div class="mcp-body" id="mcp-body">
+      <table class="ep-table" id="ep-table"></table>
+      <div class="sec-label" style="margin-top:6px;">MCP Tool Configuration (JSON)</div>
+      <div class="json-block">
+        <button class="copy-btn json-copy" onclick="copyMcpJson(this)">Copy</button>
+        <pre id="mcp-json"></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Emergency aid ──────────────────────────────────────── -->
+  <div class="panel">
+    <div class="panel-header">
+      <span class="panel-title">🆘 Emergency Aid &amp; Human Rights Resources</span>
+    </div>
+    <div class="panel-body">
+      <div class="aid-grid" id="aid-grid"></div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<!-- ═══════════════════════════════ SCRIPT ═══════════════════════════════════ -->
+<script>
+'use strict';
+
+/* ── Constants ─────────────────────────────────────────────────────────────── */
+
+const AIRCRAFT_URL = 'https://corsproxy.io/?http://api.airplanes.live/v2/point/32/53/500';
+
+const CITIES = {
+  Tehran:     { lat: 35.6892, lon: 51.3890 },
+  Isfahan:    { lat: 32.6539, lon: 51.6660 },
+  Shiraz:     { lat: 29.5918, lon: 52.5837 },
+  Tabriz:     { lat: 38.0962, lon: 46.2738 },
+  Mashhad:    { lat: 36.2605, lon: 59.6168 },
+  Ahvaz:      { lat: 31.3183, lon: 48.6706 },
+  Kermanshah: { lat: 34.3142, lon: 47.0650 },
+  Zahedan:    { lat: 29.4963, lon: 60.8629 },
+};
+
+const WMO = {
+  0:  ['☀️', 'Clear sky'],
+  1:  ['🌤️', 'Mainly clear'],
+  2:  ['⛅', 'Partly cloudy'],
+  3:  ['☁️', 'Overcast'],
+  45: ['🌫️', 'Fog'],
+  48: ['🌫️', 'Rime fog'],
+  51: ['🌦️', 'Light drizzle'],
+  53: ['🌦️', 'Moderate drizzle'],
+  55: ['🌧️', 'Dense drizzle'],
+  56: ['🌦️', 'Freezing drizzle'],
+  57: ['🌧️', 'Heavy freezing drizzle'],
+  61: ['🌧️', 'Slight rain'],
+  63: ['🌧️', 'Moderate rain'],
+  65: ['🌧️', 'Heavy rain'],
+  66: ['🌧️', 'Freezing rain'],
+  67: ['🌧️', 'Heavy freezing rain'],
+  71: ['🌨️', 'Slight snow'],
+  73: ['🌨️', 'Moderate snow'],
+  75: ['❄️', 'Heavy snow'],
+  77: ['🌨️', 'Snow grains'],
+  80: ['🌦️', 'Slight showers'],
+  81: ['🌧️', 'Moderate showers'],
+  82: ['⛈️', 'Violent showers'],
+  85: ['🌨️', 'Slight snow showers'],
+  86: ['❄️', 'Heavy snow showers'],
+  95: ['⛈️', 'Thunderstorm'],
+  96: ['⛈️', 'Thunderstorm w/ hail'],
+  99: ['⛈️', 'Thunderstorm, heavy hail'],
+};
+
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+const ENDPOINTS = [
+  { path: '/api/v1/summary',  ttl: '15s',  tool: 'get_iran_summary',  desc: 'All data in one call' },
+  { path: '/api/v1/aircraft', ttl: '15s',  tool: 'get_aircraft',      desc: 'Live positions (airplanes.live)' },
+  { path: '/api/v1/weather',  ttl: '30m',  tool: 'get_weather',       desc: 'Forecast + alerts (open-meteo)' },
+  { path: '/api/v1/internet', ttl: '2m',   tool: 'get_internet',      desc: 'IODA + OONI combined' },
+  { path: '/api/v1/markets',  ttl: '5m',   tool: 'get_markets',       desc: 'Polymarket odds' },
+  { path: '/api/v1/news',     ttl: '10m',  tool: 'get_news',          desc: 'BBC RSS filtered for Iran' },
+  { path: '/api/v1/status',   ttl: '1m',   tool: 'health_check',      desc: 'Health check all sources' },
+];
+
+const MCP_CONFIG = {
+  mcpServers: {
+    iranwatch: {
+      name: 'IranWatch OSINT',
+      description: 'Live intelligence dashboard for Iran — aircraft, weather, internet, markets, news',
+      version: '1.0.0',
+      tools: [
+        { name: 'get_iran_summary',  description: 'Fetch all IranWatch data in one call',           endpoint: '/api/v1/summary',  ttl: 15   },
+        { name: 'get_aircraft',      description: 'Live aircraft positions over Iran (500 km)',      endpoint: '/api/v1/aircraft', ttl: 15   },
+        { name: 'get_weather',       description: 'Weather forecast and alerts for Iranian cities',  endpoint: '/api/v1/weather',  ttl: 1800 },
+        { name: 'get_internet',      description: 'Iran internet connectivity status (IODA + OONI)', endpoint: '/api/v1/internet', ttl: 120  },
+        { name: 'get_markets',       description: 'Prediction market odds related to Iran',          endpoint: '/api/v1/markets',  ttl: 300  },
+        { name: 'get_news',          description: 'Latest news filtered for Iran (BBC RSS)',         endpoint: '/api/v1/news',     ttl: 600  },
+        { name: 'health_check',      description: 'Health check all upstream data sources',          endpoint: '/api/v1/status',   ttl: 60   },
+      ],
+    },
+  },
+};
+
+const AID_ORGS = [
+  { name: 'Amnesty International', url: 'https://amnesty.org/iran',    desc: 'Human rights documentation & reporting' },
+  { name: 'Human Rights Watch',    url: 'https://hrw.org/iran',        desc: 'Investigation, advocacy & reporting' },
+  { name: 'UN OCHA',               url: 'https://unocha.org',          desc: 'Humanitarian coordination' },
+  { name: 'IRC',                   url: 'https://rescue.org',          desc: 'Emergency relief & resettlement' },
+  { name: 'Article 19',            url: 'https://article19.org/iran',  desc: 'Freedom of expression advocacy' },
+  { name: 'IranHR.net',            url: 'https://iranhr.net',          desc: 'Iran human rights activist network' },
+];
+
+/* ── State ─────────────────────────────────────────────────────────────────── */
+let map = null;
+let markers = {};   // hex → L.marker
+
+/* ── Helpers ───────────────────────────────────────────────────────────────── */
+function ts() {
+  return new Date().toTimeString().slice(0, 8) + ' UTC';
+}
+
+function fmt(n, dec = 0) {
+  if (n == null || isNaN(n)) return '—';
+  return Number(n).toFixed(dec);
+}
+
+function fmtVol(v) {
+  if (v == null) return '—';
+  v = Number(v);
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return '$' + (v / 1e3).toFixed(0) + 'K';
+  return '$' + v.toFixed(0);
+}
+
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => {
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('ok');
+    setTimeout(() => { btn.textContent = orig; btn.classList.remove('ok'); }, 1800);
+  }).catch(() => {});
+}
+
+/* ── Clock ─────────────────────────────────────────────────────────────────── */
+function tickClock() {
+  document.getElementById('topbar-time').textContent =
+    new Date().toUTCString().replace('GMT', 'UTC');
+}
+
+/* ── Map init ──────────────────────────────────────────────────────────────── */
+function initMap() {
+  map = L.map('aircraft-map', {
+    center: [32, 53],
+    zoom: 5,
+    minZoom: 4,
+    maxZoom: 10,
+    zoomControl: true,
+    attributionControl: true,
+  });
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© <a href="https://openstreetmap.org">OSM</a> © <a href="https://carto.com">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 20,
+  }).addTo(map);
+
+  map.fitBounds([[38, 44], [25, 63]]);
+}
+
+/* ── Altitude colour ───────────────────────────────────────────────────────── */
+function altColor(alt) {
+  if (alt === 'ground' || alt === '' || alt == null) return '#e53e3e';
+  const n = parseInt(alt, 10);
+  if (isNaN(n) || n < 5000)  return '#e53e3e';
+  if (n < 20000)             return '#f6ad3a';
+  if (n < 35000)             return '#2e75f0';
+  return '#ffffff';
+}
+
+/* ── Plane icon ────────────────────────────────────────────────────────────── */
+function planeIcon(color, track, emergency) {
+  const rot = track || 0;
+  const ring = emergency
+    ? `<div class="ac-emergency-ring"></div>` : '';
+  const html = `<div class="ac-wrap">${ring}<svg viewBox="0 0 24 24" width="22" height="22"
+    style="transform:rotate(${rot}deg);transition:transform .6s ease;">
+    <path d="M12 2L8 10H2l4 4-1 6 7-4 7 4-1-6 4-4h-6z"
+          fill="${color}" stroke="rgba(0,0,0,.65)" stroke-width=".7"/>
+  </svg></div>`;
+  return L.divIcon({ html, className: '', iconSize: [22, 22], iconAnchor: [11, 11], popupAnchor: [0, -12] });
+}
+
+/* ── Popup HTML ────────────────────────────────────────────────────────────── */
+function popupHtml(ac) {
+  const altD  = ac.alt_baro === 'ground' ? 'Ground' : `${Number(ac.alt_baro || 0).toLocaleString()} ft`;
+  const em    = ac.emergency && ac.emergency !== 'none' && ac.emergency.trim() !== '';
+  return `
+    <div class="pu-cs">${ac.flight || ac.hex || 'Unknown'}</div>
+    <div class="pu-row"><span class="pu-lbl">Altitude</span><span class="pu-val">${altD}</span></div>
+    <div class="pu-row"><span class="pu-lbl">Speed</span><span class="pu-val">${ac.gs ? Math.round(ac.gs) + ' kts' : '—'}</span></div>
+    <div class="pu-row"><span class="pu-lbl">Heading</span><span class="pu-val">${ac.track != null ? Math.round(ac.track) + '°' : '—'}</span></div>
+    <div class="pu-row"><span class="pu-lbl">Type</span><span class="pu-val">${ac.type || '—'}</span></div>
+    <div class="pu-row"><span class="pu-lbl">ICAO</span><span class="pu-val">${ac.hex || '—'}</span></div>
+    ${em ? `<div class="pu-em">⚠ EMERGENCY: ${ac.emergency}</div>` : ''}`;
+}
+
+/* ── Load aircraft ─────────────────────────────────────────────────────────── */
+async function loadAircraft() {
+  try {
+    const res  = await fetch(AIRCRAFT_URL, { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const list  = data.ac || [];
+
+    document.getElementById('map-error').classList.remove('show');
+    document.getElementById('ac-num').textContent   = list.length;
+    document.getElementById('ac-badge').textContent = `${list.length} aircraft`;
+
+    const seen = new Set();
+
+    for (const ac of list) {
+      if (ac.lat == null || ac.lon == null) continue;
+      const hex = ac.hex || `${ac.lat}_${ac.lon}`;
+      seen.add(hex);
+
+      const color  = altColor(ac.alt_baro);
+      const em     = ac.emergency && ac.emergency !== 'none' && ac.emergency.trim() !== '';
+      const icon   = planeIcon(color, ac.track, em);
+      const popup  = popupHtml(ac);
+
+      if (markers[hex]) {
+        markers[hex].setLatLng([ac.lat, ac.lon]);
+        markers[hex].setIcon(icon);
+        markers[hex].getPopup().setContent(popup);
+      } else {
+        const m = L.marker([ac.lat, ac.lon], { icon, zIndexOffset: em ? 1000 : 0 })
+          .bindPopup(popup, { maxWidth: 230 });
+        m.addTo(map);
+        markers[hex] = m;
+      }
+    }
+
+    /* remove departed */
+    for (const hex of Object.keys(markers)) {
+      if (!seen.has(hex)) { map.removeLayer(markers[hex]); delete markers[hex]; }
+    }
+
+    document.getElementById('map-ts').textContent = `Updated ${ts()}`;
+
+  } catch (e) {
+    console.warn('Aircraft:', e);
+    document.getElementById('map-error').classList.add('show');
+    document.getElementById('map-ts').textContent = 'Update failed — retrying in 15s';
+  }
+}
+
+/* ── Weather ───────────────────────────────────────────────────────────────── */
+function selectedCity() {
+  const v = document.getElementById('city-select').value.split(',');
+  return { lat: parseFloat(v[0]), lon: parseFloat(v[1]), name: v[2] };
+}
+
+function onCityChange() {
+  const { name } = selectedCity();
+  document.getElementById('wx-city-pill').textContent = name;
+  loadWeather();
+}
+
+async function loadWeather() {
+  const { lat, lon, name } = selectedCity();
+  document.getElementById('wx-city-pill').textContent = name;
+  document.getElementById('wx-body').innerHTML = `<div class="loading"><div class="spinner"></div>Loading…</div>`;
+
+  try {
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+      `&current=temperature_2m,windspeed_10m,weathercode` +
+      `&daily=temperature_2m_max,temperature_2m_min,weathercode,windspeed_10m_max,precipitation_sum` +
+      `&forecast_days=7&timezone=Asia%2FTehran`;
+    const res  = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderWeather(data, name);
+  } catch (e) {
+    console.warn('Weather:', e);
+    document.getElementById('wx-body').innerHTML = `
+      <div class="error-state">
+        <div class="error-icon">⛅</div>
+        <div class="error-msg">Data temporarily unavailable</div>
+        <button class="btn-retry" onclick="loadWeather()">↻ Retry</button>
+      </div>`;
+  }
+}
+
+function renderWeather(data, cityName) {
+  const cur   = data.current;
+  const daily = data.daily;
+  const temp  = cur.temperature_2m;
+  const wind  = cur.windspeed_10m;
+  const [icon, label] = WMO[cur.weathercode] || ['🌡️', 'Unknown'];
+  const precip0 = (daily.precipitation_sum || [])[0] || 0;
+
+  /* alerts */
+  const alerts = [];
+  if (temp > 45)  alerts.push(['red',   '🔴 EXTREME HEAT WARNING',  `${Math.round(temp)}°C`]);
+  if (wind > 60)  alerts.push(['amber', '🟡 HIGH WINDS',            `${Math.round(wind)} km/h`]);
+  if ((cityName === 'Ahvaz' || cityName === 'Zahedan') && wind > 40)
+    alerts.push(['amber', '🟡 SANDSTORM RISK', `${Math.round(wind)} km/h winds`]);
+  if (precip0 > 30)
+    alerts.push(['amber', '🟡 FLOOD RISK', `${precip0.toFixed(0)} mm`]);
+
+  const alertsHtml = alerts.map(([t, msg, val]) => `
+    <div class="alert alert-${t}">
+      <span>${msg}</span>
+      <span style="font-family:var(--mono);font-size:10px;opacity:.75;">${val}</span>
+    </div>`).join('');
+
+  /* 7-day strip */
+  const fcHtml = daily.time.map((date, i) => {
+    const d = new Date(date + 'T00:00:00');
+    const [di] = WMO[daily.weathercode[i]] || ['🌡️'];
+    return `<div class="fc-day">
+      <div class="fc-day-lbl">${DAYS[d.getDay()]}</div>
+      <div class="fc-day-icon">${di}</div>
+      <div class="fc-day-temps">
+        <span class="fc-max">${Math.round(daily.temperature_2m_max[i])}°</span>
+        <span style="color:var(--border)"> / </span>
+        <span class="fc-min">${Math.round(daily.temperature_2m_min[i])}°</span>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('wx-body').innerHTML = `
+    <div class="wx-current">
+      <div class="wx-temp">${Math.round(temp)}°</div>
+      <div>
+        <div class="wx-icon">${icon}</div>
+        <div class="wx-cond">${label}</div>
+        <div class="wx-wind">💨 ${Math.round(wind)} km/h</div>
+      </div>
+    </div>
+    ${alerts.length ? `<div class="alerts">${alertsHtml}</div>` : ''}
+    <div class="sec-label">7-Day Forecast</div>
+    <div class="fc-strip">${fcHtml}</div>
+    <div class="last-ts">Updated ${ts()}</div>`;
+}
+
+/* ── Internet status ───────────────────────────────────────────────────────── */
+async function loadInternet() {
+  document.getElementById('inet-body').innerHTML = `<div class="loading"><div class="spinner"></div>Loading…</div>`;
+
+  let ioda = null, ooni = null;
+
+  await Promise.allSettled([
+    fetch('https://api.ioda.inetintel.cc.gatech.edu/v2/signals/raw?entityType=country&entityCode=IR&limit=5',
+      { signal: AbortSignal.timeout(10000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { ioda = d; })
+      .catch(() => {}),
+
+    fetch('https://api.ooni.io/api/v1/measurements?probe_cc=IR&limit=8&order_by=measurement_start_time',
+      { signal: AbortSignal.timeout(10000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { ooni = d; })
+      .catch(() => {}),
+  ]);
+
+  if (!ioda && !ooni) {
+    document.getElementById('inet-body').innerHTML = `
+      <div class="error-state">
+        <div class="error-icon">🌐</div>
+        <div class="error-msg">Data temporarily unavailable</div>
+        <button class="btn-retry" onclick="loadInternet()">↻ Retry</button>
+      </div>`;
+    return;
+  }
+  renderInternet(ioda, ooni);
+}
+
+function renderInternet(ioda, ooni) {
+  /* derive status from IODA — default to DEGRADED (conservative) */
+  let cls = 'inet-degraded', label = 'DEGRADED', pct = 60;
+
+  if (ioda) {
+    try {
+      const arr = (Array.isArray(ioda) ? ioda
+        : ioda.data ? (Array.isArray(ioda.data) ? ioda.data : Object.values(ioda.data))
+        : []).flat();
+      if (arr.length) {
+        const last  = arr[arr.length - 1];
+        const score = last.score ?? last.value ?? last.fraction ?? null;
+        if (score !== null) {
+          const s = parseFloat(score);
+          pct = Math.round(Math.min(Math.max(s * 100, 0), 100));
+          if (s >= 0.8)      { cls = 'inet-normal';   label = 'NORMAL';   }
+          else if (s >= 0.4) { cls = 'inet-degraded'; label = 'DEGRADED'; }
+          else               { cls = 'inet-outage';   label = 'OUTAGE';   }
+        }
+      }
+    } catch (e) {}
+  }
+
+  const fillColor = cls === 'inet-normal' ? 'var(--green)'
+    : cls === 'inet-degraded' ? 'var(--amber)' : 'var(--red)';
+
+  const pillCls = cls === 'inet-normal' ? 'pill-green'
+    : cls === 'inet-degraded' ? 'pill-amber' : 'pill-red';
+  const badge = document.getElementById('inet-badge');
+  badge.className = `pill ${pillCls}`;
+  badge.textContent = label;
+
+  /* OONI events */
+  let ooniHtml = '';
+  if (ooni && ooni.results && ooni.results.length) {
+    const items = ooni.results.slice(0, 5).map(e => {
+      const date  = (e.measurement_start_time || '').slice(0, 10) || '—';
+      const type  = (e.test_name || 'unknown').replace(/_/g, ' ').toUpperCase();
+      const ok    = !e.anomaly;
+      const rc    = ok ? 'var(--green)' : 'var(--amber)';
+      const rv    = ok ? '✓ OK' : '⚠ ANOMALY';
+      return `<div class="ooni-item">
+        <div class="ooni-type">${type}</div>
+        <div class="ooni-meta">
+          <span class="ooni-date">${date}</span>
+          <span style="color:${rc};">${rv}</span>
+        </div>
+      </div>`;
+    }).join('');
+    ooniHtml = `<div class="sec-label" style="margin-bottom:7px;">Recent OONI Measurements</div>
+      <div class="ooni-list">${items}</div>`;
+  } else {
+    ooniHtml = `<p style="font-family:var(--mono);font-size:10px;color:var(--muted);padding:4px 0;">OONI data unavailable</p>`;
+  }
+
+  document.getElementById('inet-body').innerHTML = `
+    <div class="inet-circle ${cls}">
+      <div class="pct">${pct}%</div>
+      <div>${label}</div>
+    </div>
+    <div class="bar-row"><span>Connectivity</span><span>${pct}%</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${fillColor};"></div></div>
+    ${ooniHtml}
+    <div class="last-ts">Updated ${ts()}</div>`;
+}
+
+/* ── Markets + News ────────────────────────────────────────────────────────── */
+async function loadMarketsAndNews() {
+  document.getElementById('mkt-body').innerHTML = `<div class="loading"><div class="spinner"></div>Loading…</div>`;
+
+  let markets = null, news = null;
+
+  await Promise.allSettled([
+    fetch('https://clob.polymarket.com/markets?tag=iran&limit=6',
+      { signal: AbortSignal.timeout(10000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { markets = d; })
+      .catch(() => {}),
+
+    fetch('https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Ffeeds.bbcnews.com%2Fnews%2Fworld%2Fmiddle_east%2Frss.xml&count=12',
+      { signal: AbortSignal.timeout(10000) })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { news = d; })
+      .catch(() => {}),
+  ]);
+
+  renderMarketsAndNews(markets, news);
+}
+
+function renderMarketsAndNews(markets, news) {
+  /* markets */
+  let mktHtml = '';
+  const mktList = Array.isArray(markets) ? markets
+    : (markets && markets.markets) ? markets.markets
+    : (markets && markets.data) ? markets.data
+    : [];
+
+  if (mktList.length) {
+    mktHtml = mktList.slice(0, 5).map(m => {
+      let prob = null;
+      if (m.tokens) {
+        const yes = m.tokens.find(t => (t.outcome || '').toLowerCase() === 'yes');
+        if (yes) prob = Math.round(parseFloat(yes.price) * 100);
+      } else if (m.yes_price != null) {
+        prob = Math.round(parseFloat(m.yes_price) * 100);
+      } else if (m.outcomePrices) {
+        try { prob = Math.round(parseFloat(JSON.parse(m.outcomePrices)[0]) * 100); } catch {}
+      }
+      const pc = prob == null ? '' : prob >= 70 ? 'mkt-prob-hi' : prob >= 40 ? 'mkt-prob-mid' : 'mkt-prob-lo';
+      const vol = m.volume ?? m.volumeNum ?? m.volume24hr ?? null;
+      return `<div class="mkt-item">
+        <div class="mkt-q">${m.question || m.title || '—'}</div>
+        <div class="mkt-stats">
+          <span class="mkt-prob ${pc}">${prob != null ? prob + '% YES' : '—'}</span>
+          <span class="mkt-vol">Vol: ${fmtVol(vol)}</span>
+        </div>
+      </div>`;
+    }).join('');
+  } else {
+    mktHtml = `<p style="font-family:var(--mono);font-size:10px;color:var(--muted);padding:4px 0 8px;">Markets data unavailable</p>`;
+  }
+
+  /* news */
+  let newsHtml = '';
+  const newsItems = (news && news.items)
+    ? news.items.filter(i => /iran/i.test((i.title || '') + ' ' + (i.description || ''))).slice(0, 6)
+    : [];
+
+  if (newsItems.length) {
+    newsHtml = newsItems.map(i => {
+      const d = i.pubDate ? new Date(i.pubDate).toLocaleDateString('en-GB', {
+        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+      }) : '—';
+      return `<div class="news-item">
+        <div class="news-hl"><a href="${i.link || '#'}" target="_blank" rel="noopener noreferrer">${i.title}</a></div>
+        <div class="news-meta">BBC · ${d}</div>
+      </div>`;
+    }).join('');
+  } else {
+    newsHtml = `<div class="news-item"><span style="font-family:var(--mono);font-size:10px;color:var(--muted);">No Iran articles found</span></div>`;
+  }
+
+  document.getElementById('mkt-body').innerHTML = `
+    <div class="sec-label">Prediction Markets — Iran</div>
+    ${mktHtml}
+    <div class="divider"></div>
+    <div class="sec-label">BBC News — Iran</div>
+    <div class="news-list">${newsHtml}</div>
+    <div class="last-ts">Updated ${ts()}</div>`;
+}
+
+/* ── MCP panel ─────────────────────────────────────────────────────────────── */
+function renderMcp() {
+  /* endpoint table */
+  const thead = `<thead><tr>
+    <th>Endpoint</th><th>TTL</th><th>MCP Tool</th><th>Description</th><th></th>
+  </tr></thead>`;
+  const rows = ENDPOINTS.map(e => `<tr>
+    <td class="ep-path">${e.path}</td>
+    <td class="ep-ttl">${e.ttl}</td>
+    <td class="ep-tool">${e.tool}</td>
+    <td class="ep-desc">${e.desc}</td>
+    <td><button class="copy-btn" onclick="copyText('${e.path}',this)">Copy</button></td>
+  </tr>`).join('');
+  document.getElementById('ep-table').innerHTML = thead + `<tbody>${rows}</tbody>`;
+
+  /* JSON block */
+  document.getElementById('mcp-json').textContent = JSON.stringify(MCP_CONFIG, null, 2);
+}
+
+function toggleMcp() {
+  const body  = document.getElementById('mcp-body');
+  const chev  = document.getElementById('mcp-chev');
+  const open  = body.classList.toggle('open');
+  chev.classList.toggle('open', open);
+}
+
+function copyMcpJson(btn) {
+  copyText(JSON.stringify(MCP_CONFIG, null, 2), btn);
+}
+
+/* ── Emergency aid cards ───────────────────────────────────────────────────── */
+function renderAid() {
+  document.getElementById('aid-grid').innerHTML = AID_ORGS.map(o => `
+    <div class="aid-card">
+      <a href="${o.url}" target="_blank" rel="noopener noreferrer">
+        <div class="aid-org">${o.name}</div>
+        <div class="aid-url">${o.url.replace('https://', '')}</div>
+        <div class="aid-desc">${o.desc}</div>
+      </a>
+    </div>`).join('');
+}
+
+/* ── Refresh all ───────────────────────────────────────────────────────────── */
+function refreshAll() {
+  loadAircraft();
+  loadWeather();
+  loadInternet();
+  loadMarketsAndNews();
+}
+
+/* ── Boot ──────────────────────────────────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', () => {
+  tickClock();
+  setInterval(tickClock, 1000);
+
+  initMap();
+  renderMcp();
+  renderAid();
+
+  /* initial data loads */
+  loadAircraft();
+  loadWeather();
+  loadInternet();
+  loadMarketsAndNews();
+
+  /* auto-refresh */
+  setInterval(loadAircraft,       15_000);
+  setInterval(loadInternet,      120_000);
+  setInterval(loadMarketsAndNews, 600_000);
+  setInterval(loadWeather,      1_800_000);
+});
+</script>
+</body>
+</html>
